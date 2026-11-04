@@ -91,12 +91,13 @@ Rename a tab (asks the person when no name; an empty name: called by its number 
 
 ## `tab.move`
 
-Move a tab to a position in its space (1 = first).
+Move a tab to a position (1 = first) in its space, or with `space` in another space on the same machine, splits and running terminals included (a space it leaves empty closes).
 
 | Argument | Required |
 |---|---|
 | `id` | yes |
 | `index` | yes |
+| `space` | no |
 
 ## `pane.split`
 

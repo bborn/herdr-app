@@ -364,6 +364,34 @@ impl Model {
         (addresses(&removed.root), closed)
     }
 
+    /// Moves a tab, splits and all, to a position (1 = first) in another space on
+    /// the same machine, and selects it there. A space left with no tabs closes,
+    /// as it does when its last tab is closed, but its terminals keep running.
+    pub fn move_tab_to_space(&mut self, ctx: &str, space: &str, index: usize) -> Result<(), String> {
+        let Some(from) = self.spaces.iter().position(|p| p.tab(ctx).is_some()) else { return Err(format!("no tab {ctx:?}")) };
+        let Some(to) = self.spaces.iter().position(|p| p.id == space) else { return Err(format!("no space {space:?}")) };
+        if self.spaces[from].machine != self.spaces[to].machine {
+            return Err("a tab can only move to a space on the same machine".into());
+        }
+        let p = &mut self.spaces[from];
+        let ci = p.tabs.iter().position(|c| c.id == ctx).unwrap();
+        let tab = p.tabs.remove(ci);
+        if p.active.as_deref() == Some(ctx) {
+            p.active = p.tabs.get(ci).or(p.tabs.last()).map(|c| c.id.clone());
+        }
+        let emptied = p.tabs.is_empty().then(|| p.id.clone());
+        let q = &mut self.spaces[to];
+        let at = index.saturating_sub(1).min(q.tabs.len());
+        q.tabs.insert(at, tab);
+        q.active = Some(ctx.to_owned());
+        self.active = Some(space.to_owned());
+        if let Some(id) = emptied {
+            self.remove_space(&id);
+            self.active = Some(space.to_owned());
+        }
+        Ok(())
+    }
+
     /// Removes a space (remembered in `recent`). Returns its terminal addresses.
     pub fn remove_space(&mut self, id: &str) -> Vec<String> {
         let Some(pi) = self.spaces.iter().position(|p| p.id == id) else { return vec![] };
@@ -687,6 +715,29 @@ mod tests {
         assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("c2"));
         m.select_tab("c1");
         assert_eq!(m.tab("c1").unwrap().settled, None);
+    }
+
+    #[test]
+    fn a_tab_moves_to_another_space_whole_and_an_emptied_space_closes() {
+        let mut m = model_with_one();
+        m.add_tab("p1", Tab::new("c2", "docs", "x2", "t2"));
+        m.add_space("p2", "web", "/src/web", Tab::new("c3", "deploy", "x3", "t3"));
+        assert_eq!(m.move_tab_to_space("c2", "p2", 1), Ok(()));
+        let ids = |m: &Model, p: &str| m.space(p).unwrap().tabs.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&m, "p2"), ["c2", "c3"]);
+        assert_eq!(ids(&m, "p1"), ["c1"]);
+        assert_eq!(m.active_tab().map(|c| c.id.as_str()), Some("c2"));
+        // Its terminals came along.
+        assert!(m.tab("c2").unwrap().root.find("x2").is_some());
+        // Moving the last tab out closes the space it left.
+        assert_eq!(m.move_tab_to_space("c1", "p2", 9), Ok(()));
+        assert!(m.space("p1").is_none());
+        assert_eq!(ids(&m, "p2"), ["c2", "c3", "c1"]);
+        assert_eq!(m.active.as_deref(), Some("p2"));
+        // Not across machines: the terminals can't follow.
+        m.add_space("p3", "vps", "/srv", Tab::new("c4", "", "x4", "vps/t4"));
+        m.space_mut("p3").unwrap().machine = Some("vps".into());
+        assert!(m.move_tab_to_space("c4", "p2", 1).is_err());
     }
 
     #[test]
